@@ -72,6 +72,8 @@ def aplicar_cenarios_controlados(historico: pd.DataFrame) -> pd.DataFrame:
 
     month_values = pd.to_datetime(data["mes"], errors="coerce")
     months = sorted(month_values.dropna().unique())
+    if len(months) != 24:
+        raise ValueError(f"A base deve conter 24 meses; foram encontrados {len(months)}.")
     if len(months) < 6:
         raise ValueError("A base precisa conter pelo menos seis meses para aplicar os cenários.")
 
@@ -267,6 +269,33 @@ def aplicar_cenarios_controlados(historico: pd.DataFrame) -> pd.DataFrame:
     ).abs().max()
     if not np.isfinite(reconciliation) or reconciliation > 0.01:
         raise ValueError(f"Falha na conciliação de lucro bruto (diferença máxima: {reconciliation}).")
+
+    if {"custo_variavel_adicional_real", "margem_contribuicao_real"}.issubset(data.columns):
+        contribution_reconciliation = (
+            data["lucro_bruto_real"]
+            - data["custo_variavel_adicional_real"]
+            - data["margem_contribuicao_real"]
+        ).abs().max()
+        if not np.isfinite(contribution_reconciliation) or contribution_reconciliation > 0.01:
+            raise ValueError(
+                "Falha na conciliação da margem de contribuição "
+                f"(diferença máxima: {contribution_reconciliation})."
+            )
+
+    clean = data["cenario_simulado"].eq("Sem desvio induzido")
+    for actual_col, budget_col in (
+        ("receita_liquida_real", "receita_liquida_orcada"),
+        ("custo_produtos_real", "custo_produtos_orcado"),
+        ("lucro_bruto_real", "lucro_bruto_orcado"),
+    ):
+        clean_gap = (
+            data.loc[clean, actual_col] - data.loc[clean, budget_col]
+        ).abs().max()
+        if not np.isfinite(clean_gap) or clean_gap > 0.01:
+            raise ValueError(
+                f"Os SKUs sem desvio induzido têm diferença inesperada em {actual_col}: {clean_gap}."
+            )
+
     sku_gaps = data.groupby("sku_id")["lucro_bruto_real"].sum() - data.groupby("sku_id")["lucro_bruto_orcado"].sum()
     negative_count = int((sku_gaps < -0.01).sum())
     if negative_count != PROBLEM_SKUS:
