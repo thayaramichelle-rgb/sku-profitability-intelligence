@@ -2394,6 +2394,9 @@ elif page == "08 · Data Quality & Methodology":
             "Famílias distintas", "Segmentos distintos",
             "Meses disponíveis", "Primeiro mês", "Último mês",
             "Duplicidades de mês + SKU", "Células vazias",
+            "SKUs com desvio induzido", "SKUs sem desvio induzido",
+            "SKUs com gap negativo no histórico completo",
+            "Diferença máxima na conciliação de lucro bruto",
         ],
         "Resultado": [
             number(len(hist)),
@@ -2405,12 +2408,31 @@ elif page == "08 · Data Quality & Methodology":
             hist["mes"].max().strftime("%m/%Y"),
             number(hist.duplicated(["mes", "sku_id"]).sum()),
             number(int(hist.isna().sum().sum())),
+            number(hist.loc[hist["cenario_simulado"] != "Sem desvio induzido", "sku_id"].nunique()),
+            number(hist.loc[hist["cenario_simulado"] == "Sem desvio induzido", "sku_id"].nunique()),
+            number((hist.groupby("sku_id")["desvio_lucro"].sum() < -0.01).sum()),
+            money((hist["receita_liquida_real"] - hist["custo_produtos_real"] - hist["lucro_bruto_real"]).abs().max()),
         ],
     })
     show_table(quality, key="data_quality_table")
     download_csv(
         quality, "Baixar relatório de qualidade em CSV",
         "qualidade_dados.csv", "download_quality",
+    )
+
+    st.subheader("Distribuição dos cenários por família e segmento")
+    scenario_distribution = (
+        hist[["sku_id", "familia", "segmento", "cenario_simulado"]]
+        .drop_duplicates("sku_id")
+        .groupby(["familia", "segmento", "cenario_simulado"], dropna=False)
+        .agg(SKUs=("sku_id", "nunique"))
+        .reset_index()
+        .sort_values(["familia", "segmento", "cenario_simulado"])
+    )
+    show_table(scenario_distribution, key="scenario_distribution_table")
+    download_csv(
+        scenario_distribution, "Baixar distribuição dos cenários em CSV",
+        "distribuicao_cenarios_sku.csv", "download_scenario_distribution",
     )
 
     st.subheader("Indicadores financeiros do recorte")
@@ -2454,7 +2476,11 @@ elif page == "08 · Data Quality & Methodology":
     - **Decomposição preço/volume/custo:** estimativa aritmética para orientar
       investigação; o residual reúne interações e efeitos não representados.
     - **Hipótese de causa:** sinal preliminar, não comprovação causal.
-    - **Dados:** base sintética criada para demonstrar o processo analítico.
+    - **Desenho do cenário sintético:** exatamente 2.000 dos 8.000 SKUs recebem desvios controlados,
+      distribuídos proporcionalmente entre famílias e segmentos; os desvios são aplicados nos seis meses finais.
+    - **Validação financeira:** receita realizada = volume realizado × preço líquido realizado;
+      custo dos produtos = volume realizado × custo unitário; lucro bruto = receita líquida − custo dos produtos.
+    - **Dados:** base sintética criada para demonstrar o processo analítico; não representa uma empresa real.
     """)
 
     st.subheader("Amostra dos dados filtrados")
