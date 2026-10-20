@@ -598,6 +598,33 @@ def load_data():
     if "desconto_pct" not in data.columns:
         data["desconto_pct"] = np.nan
 
+    # Margem de contribuição: lucro bruto menos custos variáveis adicionais.
+    # Não é margem líquida; despesas fixas, financeiras e impostos não estão
+    # necessariamente representados nesta base sintética.
+    if "custo_variavel_adicional_real" in data.columns:
+        if "margem_contribuicao_real" not in data.columns:
+            data["margem_contribuicao_real"] = (
+                data["lucro_bruto_real"] - data["custo_variavel_adicional_real"]
+            )
+    if "custo_variavel_adicional_orcado" in data.columns:
+        if "margem_contribuicao_orcada" not in data.columns:
+            data["margem_contribuicao_orcada"] = (
+                data["lucro_bruto_orcado"] - data["custo_variavel_adicional_orcado"]
+            )
+
+    if "margem_contribuicao_real" in data.columns:
+        data["margem_contribuicao_real_pct_calc"] = np.where(
+            data["receita_liquida_real"] != 0,
+            data["margem_contribuicao_real"] / data["receita_liquida_real"],
+            np.nan,
+        )
+    if "margem_contribuicao_orcada" in data.columns:
+        data["margem_contribuicao_orcada_pct_calc"] = np.where(
+            data["receita_liquida_orcada"] != 0,
+            data["margem_contribuicao_orcada"] / data["receita_liquida_orcada"],
+            np.nan,
+        )
+
     return data
 
 try:
@@ -736,6 +763,31 @@ def summarize(data, by=None):
     out["desvio_margem_pp"] = (
         out["margem_real"] - out["margem_orcada"]
     ) * 100
+
+    # Métricas de margem de contribuição só são exibidas quando a base contém
+    # os componentes necessários para calculá-las.
+    if {"margem_contribuicao_real", "margem_contribuicao_orcada"}.issubset(data.columns):
+        if by:
+            contribution = data.groupby(by, dropna=False).agg(
+                mc_real=("margem_contribuicao_real", "sum"),
+                mc_orcada=("margem_contribuicao_orcada", "sum"),
+            ).reset_index()
+            out = out.merge(contribution, on=by, how="left")
+        else:
+            out["mc_real"] = data["margem_contribuicao_real"].sum()
+            out["mc_orcada"] = data["margem_contribuicao_orcada"].sum()
+
+        out["margem_contribuicao_real_pct"] = np.where(
+            out["receita_real"] != 0, out["mc_real"] / out["receita_real"], np.nan
+        )
+        out["margem_contribuicao_orcada_pct"] = np.where(
+            out["receita_orcada"] != 0, out["mc_orcada"] / out["receita_orcada"], np.nan
+        )
+        out["desvio_margem_contribuicao_pp"] = (
+            out["margem_contribuicao_real_pct"]
+            - out["margem_contribuicao_orcada_pct"]
+        ) * 100
+
     return out
 
 
@@ -743,6 +795,27 @@ total = summarize(filtered).iloc[0]
 monthly = summarize(filtered, ["mes"]).sort_values("mes")
 family_summary = summarize(filtered, ["familia"]).sort_values("desvio_lucro")
 sku_summary = summarize(filtered, ["sku_id", "familia", "segmento"])
+
+# Decomposição aritmética do desvio do lucro bruto por registro.
+# Estes componentes ajudam a priorizar investigação, mas não provam causalidade.
+filtered["efeito_preco"] = (
+    (filtered["preco_liquido_unitario"] - filtered["preco_liquido_orcado_unitario"])
+    * filtered["quantidade_real"]
+)
+filtered["efeito_volume"] = (
+    (filtered["quantidade_real"] - filtered["quantidade_orcada"])
+    * (filtered["preco_liquido_orcado_unitario"] - filtered["custo_unitario_orcado"])
+)
+filtered["efeito_custo"] = -(
+    (filtered["custo_unitario_real"] - filtered["custo_unitario_orcado"])
+    * filtered["quantidade_real"]
+)
+filtered["residual_decomposicao"] = (
+    filtered["desvio_lucro"]
+    - filtered["efeito_preco"]
+    - filtered["efeito_volume"]
+    - filtered["efeito_custo"]
+)
 
 sku_extra = filtered.groupby("sku_id", as_index=False).agg(
     preco_real=("preco_liquido_unitario", "mean"),
@@ -752,30 +825,54 @@ sku_extra = filtered.groupby("sku_id", as_index=False).agg(
     desconto_medio=("desconto_pct", "mean"),
     meses_analisados=("mes", "nunique"),
     meses_com_gap=("desvio_lucro", lambda s: int((s < 0).sum())),
+    efeito_preco=("efeito_preco", "sum"),
+    efeito_volume=("efeito_volume", "sum"),
+    efeito_custo=("efeito_custo", "sum"),
+    residual_decomposicao=("residual_decomposicao", "sum"),
 )
 
+if {"margem_contribuicao_real", "margem_contribuicao_orcada"}.issubset(filtered.columns):
+    mc_extra = filtered.groupby("sku_id", as_index=False).agg(
+        margem_contribuicao_real=("margem_contribuicao_real", "sum"),
+        margem_contribuicao_orcada=("margem_contribuicao_orcada", "sum"),
+    )
+    sku_extra = sku_extra.merge(mc_extra, on="sku_id", how="left")
+
 sku_summary = sku_summary.merge(sku_extra, on="sku_id", how="left")
+if {"margem_contribuicao_real", "margem_contribuicao_orcada"}.issubset(sku_summary.columns):
+    sku_summary["margem_contribuicao_real_pct"] = np.where(
+        sku_summary["receita_real"] != 0,
+        sku_summary["margem_contribuicao_real"] / sku_summary["receita_real"],
+        np.nan,
+    )
+    sku_summary["margem_contribuicao_orcada_pct"] = np.where(
+        sku_summary["receita_orcada"] != 0,
+        sku_summary["margem_contribuicao_orcada"] / sku_summary["receita_orcada"],
+        np.nan,
+    )
+    sku_summary["desvio_margem_contribuicao_pp"] = (
+        sku_summary["margem_contribuicao_real_pct"]
+        - sku_summary["margem_contribuicao_orcada_pct"]
+    ) * 100
 sku_summary["recorrencia_gap"] = (
     sku_summary["meses_com_gap"]
     / sku_summary["meses_analisados"].replace(0, np.nan)
 )
 
-sku_summary["hipotese"] = np.select(
-    [
-        (sku_summary["desvio_lucro"] < 0)
-        & (sku_summary["custo_unit_real"] > sku_summary["custo_unit_orcado"]),
-        (sku_summary["desvio_lucro"] < 0)
-        & (sku_summary["preco_real"] < sku_summary["preco_orcado"]),
-        (sku_summary["desvio_lucro"] < 0)
-        & (sku_summary["volume_real"] < sku_summary["volume_orcado"]),
-    ],
-    [
-        "Investigar custo unitário",
-        "Investigar preço e descontos",
-        "Investigar volume",
-    ],
-    default="Investigar mix e outros fatores",
-)
+# Seleciona o componente negativo de maior magnitude como sinal inicial.
+# O rótulo descreve uma hipótese de investigação, não uma causa confirmada.
+component_cols = ["efeito_preco", "efeito_volume", "efeito_custo", "residual_decomposicao"]
+component_labels = {
+    "efeito_preco": "Sinal: pressão de preço (validar)",
+    "efeito_volume": "Sinal: efeito de volume (validar)",
+    "efeito_custo": "Sinal: aumento de custo (validar)",
+    "residual_decomposicao": "Sinal: interações/outros fatores (validar)",
+}
+sku_summary["componente_mais_negativo"] = sku_summary[component_cols].idxmin(axis=1)
+sku_summary["hipotese"] = sku_summary["componente_mais_negativo"].map(component_labels)
+sku_summary.loc[
+    sku_summary["desvio_lucro"] >= 0, "hipotese"
+] = "Sem gap negativo: monitorar desempenho"
 
 sku_summary["prioridade"] = np.select(
     [
@@ -825,27 +922,41 @@ with st.expander("⬇️ Exportar dados para análise"):
 # ==========================================================
 
 def kpi_row():
-    a, b, c, d = st.columns(4)
-    a.metric(
+    has_contribution = "mc_real" in total.index
+    columns = st.columns(5 if has_contribution else 4)
+    columns[0].metric(
         "Receita realizada",
         money(total["receita_real"]),
         f"{money(total['desvio_receita'])} vs. orçamento",
     )
-    b.metric(
+    columns[1].metric(
         "Lucro bruto realizado",
         money(total["lucro_real"]),
         f"{money(total['desvio_lucro'])} vs. orçamento",
     )
-    c.metric(
+    columns[2].metric(
         "Margem bruta realizada",
         percent(total["margem_real"]),
         percentage_points(total["desvio_margem_pp"]),
     )
-    d.metric(
-        "SKUs analisados",
-        number(total["skus"]),
-        f"{filtered['mes'].nunique()} meses no recorte",
-    )
+    if has_contribution:
+        columns[3].metric(
+            "Margem de contribuição",
+            percent(total["margem_contribuicao_real_pct"]),
+            percentage_points(total["desvio_margem_contribuicao_pp"]),
+            help="Lucro bruto menos custos variáveis adicionais presentes na base; não equivale à margem líquida.",
+        )
+        columns[4].metric(
+            "SKUs analisados",
+            number(total["skus"]),
+            f"{filtered['mes'].nunique()} meses no recorte",
+        )
+    else:
+        columns[3].metric(
+            "SKUs analisados",
+            number(total["skus"]),
+            f"{filtered['mes'].nunique()} meses no recorte",
+        )
 
 
 def show_monthly(real_col, budget_col, title, percent_axis=False):
@@ -901,6 +1012,8 @@ def show_sku_table(data, height=450, suffix="sku_table"):
         "lucro_real", "lucro_orcado", "desvio_lucro",
         "margem_real", "margem_orcada",
         "desvio_margem_pp", "recorrencia_gap",
+        "efeito_preco", "efeito_volume", "efeito_custo",
+        "residual_decomposicao",
         "prioridade", "hipotese",
     ]
 
@@ -918,6 +1031,10 @@ def show_sku_table(data, height=450, suffix="sku_table"):
         "margem_orcada": "Margem orçada",
         "desvio_margem_pp": "Gap margem (p.p.)",
         "recorrencia_gap": "Recorrência do gap",
+        "efeito_preco": "Efeito preço (R$)",
+        "efeito_volume": "Efeito volume (R$)",
+        "efeito_custo": "Efeito custo (R$)",
+        "residual_decomposicao": "Residual (R$)",
         "prioridade": "Prioridade",
         "hipotese": "Hipótese inicial",
     })
@@ -1005,6 +1122,24 @@ if page == "01 · Executive Overview":
     show_sku_table(
         sku_summary.sort_values("desvio_lucro").head(15),
         suffix="maiores_gaps_sku",
+    )
+
+    st.subheader("SKUs de maior receita com margem abaixo do orçamento")
+    receita_corte = sku_summary["receita_real"].quantile(0.75)
+    high_revenue_low_margin = sku_summary[
+        (sku_summary["receita_real"] >= receita_corte)
+        & (sku_summary["desvio_margem_pp"] < 0)
+    ].sort_values("desvio_lucro").head(15)
+    if high_revenue_low_margin.empty:
+        st.info("Nenhum SKU atende aos critérios de receita alta e margem abaixo do orçamento neste recorte.")
+    else:
+        show_sku_table(
+            high_revenue_low_margin,
+            suffix="alta_receita_margem_baixa",
+        )
+    st.caption(
+        "O corte de receita alta corresponde ao quartil superior dos SKUs no recorte. "
+        "A tabela prioriza produtos relevantes em receita que perderam margem versus orçamento."
     )
 
     st.markdown(
@@ -1224,39 +1359,52 @@ elif page == "05 · SKU Investigation":
     c.metric("Desvio de lucro", money(sku_row["desvio_lucro"]))
     d.metric("Desvio de margem", percentage_points(sku_row["desvio_margem_pp"]))
 
-    detail_table = pd.DataFrame({
-        "Indicador": [
-            "Receita realizada", "Receita orçada", "Desvio de receita",
-            "Lucro bruto realizado", "Lucro bruto orçado",
-            "Desvio de lucro bruto", "Margem realizada", "Margem orçada",
-            "Desvio de margem", "Volume realizado", "Volume orçado",
-            "Preço líquido médio real", "Preço líquido médio orçado",
-            "Custo unitário médio real", "Custo unitário médio orçado",
-            "Recorrência do gap", "Hipótese inicial", "Prioridade",
-        ],
-        "Valor": [
-            money(sku_row["receita_real"]),
-            money(sku_row["receita_orcada"]),
-            money(sku_row["desvio_receita"]),
-            money(sku_row["lucro_real"]),
-            money(sku_row["lucro_orcado"]),
-            money(sku_row["desvio_lucro"]),
-            percent(sku_row["margem_real"]),
-            percent(sku_row["margem_orcada"]),
-            percentage_points(sku_row["desvio_margem_pp"]),
-            number(sku_row["volume_real"]),
-            number(sku_row["volume_orcado"]),
-            money(sku_row["preco_real"]),
-            money(sku_row["preco_orcado"]),
-            money(sku_row["custo_unit_real"]),
-            money(sku_row["custo_unit_orcado"]),
-            percent(sku_row["recorrencia_gap"]),
-            str(sku_row["hipotese"]),
-            str(sku_row["prioridade"]),
-        ],
-    })
+    detail_rows = [
+        ("Receita realizada", money(sku_row["receita_real"])),
+        ("Receita orçada", money(sku_row["receita_orcada"])),
+        ("Desvio de receita", money(sku_row["desvio_receita"])),
+        ("Lucro bruto realizado", money(sku_row["lucro_real"])),
+        ("Lucro bruto orçado", money(sku_row["lucro_orcado"])),
+        ("Desvio de lucro bruto", money(sku_row["desvio_lucro"])),
+        ("Margem bruta realizada", percent(sku_row["margem_real"])),
+        ("Margem bruta orçada", percent(sku_row["margem_orcada"])),
+        ("Desvio de margem bruta", percentage_points(sku_row["desvio_margem_pp"])),
+        ("Volume realizado", number(sku_row["volume_real"])),
+        ("Volume orçado", number(sku_row["volume_orcado"])),
+        ("Preço líquido médio real", money(sku_row["preco_real"])),
+        ("Preço líquido médio orçado", money(sku_row["preco_orcado"])),
+        ("Custo unitário médio real", money(sku_row["custo_unit_real"])),
+        ("Custo unitário médio orçado", money(sku_row["custo_unit_orcado"])),
+        ("Recorrência do gap", percent(sku_row["recorrencia_gap"])),
+        ("Hipótese inicial", str(sku_row["hipotese"])),
+        ("Prioridade", str(sku_row["prioridade"])),
+    ]
+    if "margem_contribuicao_real_pct" in sku_row.index:
+        detail_rows.extend([
+            ("Margem de contribuição real", percent(sku_row["margem_contribuicao_real_pct"])),
+            ("Margem de contribuição orçada", percent(sku_row["margem_contribuicao_orcada_pct"])),
+            ("Desvio de margem de contribuição", percentage_points(sku_row["desvio_margem_contribuicao_pp"])),
+        ])
+    detail_table = pd.DataFrame(detail_rows, columns=["Indicador", "Valor"])
 
     show_table(detail_table, key="sku_detail_table")
+
+    st.subheader("Decomposição aritmética do desvio de lucro")
+    decomposition = pd.DataFrame({
+        "Componente": ["Preço", "Volume", "Custo unitário", "Residual / interações", "Desvio total observado"],
+        "Impacto (R$)": [
+            sku_row["efeito_preco"],
+            sku_row["efeito_volume"],
+            sku_row["efeito_custo"],
+            sku_row["residual_decomposicao"],
+            sku_row["desvio_lucro"],
+        ],
+    })
+    show_table(decomposition, key="sku_decomposition")
+    st.caption(
+        "A decomposição é uma aproximação aritmética baseada nas diferenças entre realizado e orçamento. "
+        "O residual reúne efeitos não representados e interações; nenhum componente, isoladamente, comprova causalidade."
+    )
     download_csv(
         detail_table, "Baixar indicadores do SKU em CSV",
         f"indicadores_{selected_sku}.csv", "download_sku_detail",
@@ -1543,9 +1691,14 @@ elif page == "08 · Data Quality & Methodology":
     st.markdown("""
     - **Desvio:** realizado menos orçamento.
     - **Margem bruta:** lucro bruto dividido pela receita líquida.
+    - **Margem de contribuição:** lucro bruto menos custos variáveis adicionais
+      explicitamente registrados na base, dividido pela receita líquida.
+    - **Margem líquida:** não é calculada neste projeto; exigiria despesas fixas,
+      financeiras, impostos e demais componentes aplicáveis.
     - **Recorrência do gap:** proporção de meses do período com desvio
       negativo de lucro bruto.
-    - **Prioridade:** regra inicial para ordenar a investigação.
+    - **Decomposição preço/volume/custo:** estimativa aritmética para orientar
+      investigação; o residual reúne interações e efeitos não representados.
     - **Hipótese de causa:** sinal preliminar, não comprovação causal.
     - **Dados:** base sintética criada para demonstrar o processo analítico.
     """)
