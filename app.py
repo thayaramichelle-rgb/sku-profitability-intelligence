@@ -652,6 +652,7 @@ pages = [
     "07 · Action Plan & Opportunities",
     "08 · Data Quality & Methodology",
     "09 · Pricing Lab",
+    "10 · Rentabilidade & Descontos",
 ]
 
 st.sidebar.title("SKU PROFITABILITY")
@@ -2010,6 +2011,210 @@ elif page == "09 · Pricing Lab":
 # ==========================================================
 # 08 — DATA QUALITY & METHODOLOGY
 # ==========================================================
+
+elif page == "10 · Rentabilidade & Descontos":
+    kpi_row()
+    st.title("Rentabilidade & Descontos")
+    st.markdown(
+        '<div class="insight"><b>Objetivo:</b> priorizar famílias, segmentos e SKUs para investigação '
+        'de rentabilidade e possíveis oportunidades de preço. O valor de oportunidade é uma estimativa '
+        'aritmética frente ao preço orçado — não representa recuperação garantida nem prova de desconto indevido.</div>',
+        unsafe_allow_html=True,
+    )
+
+    tab_portfolio, tab_discount = st.tabs([
+        "Rentabilidade por família e segmento",
+        "Oportunidade indicativa de preço",
+    ])
+
+    with tab_portfolio:
+        st.subheader("Onde a rentabilidade está pressionada?")
+        level = st.radio(
+            "Agrupar por",
+            ["Família", "Segmento"],
+            horizontal=True,
+            key="profitability_level",
+        )
+        group_col = "familia" if level == "Família" else "segmento"
+        rent = summarize(filtered, [group_col])
+        discount_agg = filtered.groupby(group_col, dropna=False).agg(
+            desconto_medio=("desconto_pct", "mean"),
+            preco_real_medio=("preco_liquido_unitario", "mean"),
+            preco_orcado_medio=("preco_liquido_orcado_unitario", "mean"),
+        ).reset_index()
+        rent = rent.merge(discount_agg, on=group_col, how="left")
+        rent["oportunidade_preco_indicativa"] = (
+            (filtered["preco_liquido_orcado_unitario"] - filtered["preco_liquido_unitario"])
+            .clip(lower=0) * filtered["quantidade_real"].clip(lower=0)
+        ).groupby(filtered[group_col], dropna=False).sum().reindex(rent[group_col]).to_numpy()
+        rent["desconto_medio_pct"] = rent["desconto_medio"] * 100
+        rent["margem_real_pct"] = rent["margem_real"] * 100
+        rent["margem_orcada_pct"] = rent["margem_orcada"] * 100
+        c1, c2 = st.columns(2)
+        with c1:
+            st.plotly_chart(
+                px.bar(
+                    rent.sort_values("desvio_lucro"),
+                    x=group_col, y="desvio_lucro",
+                    title="Desvio de lucro bruto vs. orçamento",
+                    labels={group_col: level, "desvio_lucro": "Desvio de lucro bruto"},
+                ),
+                use_container_width=True,
+            )
+        with c2:
+            st.plotly_chart(
+                px.scatter(
+                    rent,
+                    x="desconto_medio_pct", y="margem_real_pct",
+                    size="receita_real", color="desvio_lucro",
+                    hover_name=group_col,
+                    title="Desconto médio × margem bruta realizada",
+                    labels={
+                        "desconto_medio_pct": "Desconto médio (%)",
+                        "margem_real_pct": "Margem bruta realizada (%)",
+                        "desvio_lucro": "Desvio de lucro",
+                        "receita_real": "Receita realizada",
+                    },
+                ),
+                use_container_width=True,
+            )
+        rent_view = rent[[
+            group_col, "skus", "receita_real", "receita_orcada",
+            "lucro_real", "lucro_orcado", "margem_real_pct",
+            "margem_orcada_pct", "desvio_margem_pp",
+            "desconto_medio_pct", "oportunidade_preco_indicativa",
+        ]].copy()
+        rent_view = rent_view.rename(columns={
+            group_col: level,
+            "skus": "SKUs",
+            "receita_real": "Receita realizada",
+            "receita_orcada": "Receita orçada",
+            "lucro_real": "Lucro bruto realizado",
+            "lucro_orcado": "Lucro bruto orçado",
+            "margem_real_pct": "Margem realizada (%)",
+            "margem_orcada_pct": "Margem orçada (%)",
+            "desvio_margem_pp": "Desvio margem (p.p.)",
+            "desconto_medio_pct": "Desconto médio (%)",
+            "oportunidade_preco_indicativa": "Oportunidade indicativa de preço",
+        })
+        st.dataframe(
+            rent_view.sort_values("Desvio margem (p.p.)"),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Receita realizada": st.column_config.NumberColumn(format="R$ %.2f"),
+                "Receita orçada": st.column_config.NumberColumn(format="R$ %.2f"),
+                "Lucro bruto realizado": st.column_config.NumberColumn(format="R$ %.2f"),
+                "Lucro bruto orçado": st.column_config.NumberColumn(format="R$ %.2f"),
+                "Margem realizada (%)": st.column_config.NumberColumn(format="%.2f%%"),
+                "Margem orçada (%)": st.column_config.NumberColumn(format="%.2f%%"),
+                "Desvio margem (p.p.)": st.column_config.NumberColumn(format="%.2f"),
+                "Desconto médio (%)": st.column_config.NumberColumn(format="%.2f%%"),
+                "Oportunidade indicativa de preço": st.column_config.NumberColumn(format="R$ %.2f"),
+            },
+        )
+        st.download_button(
+            "Baixar análise por família/segmento (CSV)",
+            rent_view.to_csv(index=False).encode("utf-8-sig"),
+            file_name="rentabilidade_familias_segmentos.csv",
+            mime="text/csv",
+        )
+
+    with tab_discount:
+        st.subheader("SKUs com preço realizado abaixo do orçamento")
+        st.caption(
+            "A oportunidade indicativa calcula (preço orçado − preço realizado) × volume realizado, "
+            "considerando apenas diferenças positivas. Não incorpora elasticidade, resposta competitiva, "
+            "impostos adicionais nem condições específicas de clientes."
+        )
+        price_op = filtered.copy()
+        price_op["gap_preco_unitario"] = (
+            price_op["preco_liquido_orcado_unitario"] - price_op["preco_liquido_unitario"]
+        )
+        price_op["oportunidade_preco_indicativa"] = (
+            price_op["gap_preco_unitario"].clip(lower=0)
+            * price_op["quantidade_real"].clip(lower=0)
+        )
+        price_op["receita_preco_orcado_volume_real"] = (
+            price_op["preco_liquido_orcado_unitario"]
+            * price_op["quantidade_real"].clip(lower=0)
+        )
+        opp = price_op.groupby(["sku_id", "familia", "segmento"], dropna=False).agg(
+            receita_real=("receita_liquida_real", "sum"),
+            volume_real=("quantidade_real", "sum"),
+            preco_real_medio=("preco_liquido_unitario", "mean"),
+            preco_orcado_medio=("preco_liquido_orcado_unitario", "mean"),
+            desconto_medio=("desconto_pct", "mean"),
+            desvio_lucro=("desvio_lucro", "sum"),
+            oportunidade_preco_indicativa=("oportunidade_preco_indicativa", "sum"),
+            receita_preco_orcado_volume_real=("receita_preco_orcado_volume_real", "sum"),
+        ).reset_index()
+        opp["gap_preco_pct"] = np.where(
+            opp["preco_orcado_medio"] != 0,
+            (opp["preco_real_medio"] / opp["preco_orcado_medio"] - 1) * 100,
+            np.nan,
+        )
+        opp = opp.sort_values("oportunidade_preco_indicativa", ascending=False)
+        top_n = st.slider("Quantidade de SKUs para exibir", 5, 30, 15, key="price_op_topn")
+        opp_top = opp.head(top_n)
+        k1, k2, k3 = st.columns(3)
+        k1.metric("Oportunidade indicativa total", money(opp["oportunidade_preco_indicativa"].sum()))
+        k2.metric("SKUs com diferença positiva", int((opp["oportunidade_preco_indicativa"] > 0).sum()))
+        k3.metric("Receita realizada dos SKUs", money(opp["receita_real"].sum()))
+        st.plotly_chart(
+            px.bar(
+                opp_top.sort_values("oportunidade_preco_indicativa"),
+                x="oportunidade_preco_indicativa", y="sku_id", orientation="h",
+                color="familia",
+                title="Maiores oportunidades indicativas frente ao preço orçado",
+                labels={
+                    "oportunidade_preco_indicativa": "Valor indicativo (R$)",
+                    "sku_id": "SKU",
+                    "familia": "Família",
+                },
+            ),
+            use_container_width=True,
+        )
+        opp_view = opp[[
+            "sku_id", "familia", "segmento", "receita_real", "volume_real",
+            "preco_real_medio", "preco_orcado_medio", "gap_preco_pct",
+            "desconto_medio", "desvio_lucro", "oportunidade_preco_indicativa",
+            "receita_preco_orcado_volume_real",
+        ]].rename(columns={
+            "sku_id": "SKU",
+            "familia": "Família",
+            "segmento": "Segmento",
+            "receita_real": "Receita realizada",
+            "volume_real": "Volume realizado",
+            "preco_real_medio": "Preço realizado médio",
+            "preco_orcado_medio": "Preço orçado médio",
+            "gap_preco_pct": "Diferença preço vs. orçamento (%)",
+            "desconto_medio": "Desconto médio",
+            "desvio_lucro": "Desvio de lucro bruto",
+            "oportunidade_preco_indicativa": "Oportunidade indicativa (R$)",
+            "receita_preco_orcado_volume_real": "Receita a preço orçado e volume real",
+        })
+        st.dataframe(
+            opp_view.head(top_n),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Receita realizada": st.column_config.NumberColumn(format="R$ %.2f"),
+                "Preço realizado médio": st.column_config.NumberColumn(format="R$ %.2f"),
+                "Preço orçado médio": st.column_config.NumberColumn(format="R$ %.2f"),
+                "Diferença preço vs. orçamento (%)": st.column_config.NumberColumn(format="%.2f%%"),
+                "Desconto médio": st.column_config.NumberColumn(format="%.2f%%"),
+                "Desvio de lucro bruto": st.column_config.NumberColumn(format="R$ %.2f"),
+                "Oportunidade indicativa (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
+                "Receita a preço orçado e volume real": st.column_config.NumberColumn(format="R$ %.2f"),
+            },
+        )
+        st.download_button(
+            "Baixar oportunidades indicativas (CSV)",
+            opp_view.to_csv(index=False).encode("utf-8-sig"),
+            file_name="oportunidades_preco_sku.csv",
+            mime="text/csv",
+        )
 
 elif page == "08 · Data Quality & Methodology":
     st.subheader("Qualidade e cobertura dos dados")
