@@ -7,7 +7,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from cenarios import aplicar_cenarios_controlados
+from cenarios import aplicar_cenarios_controlados, calcular_simulacao_recuperacao_margem
 
 # ==========================================================
 # SKU PROFITABILITY INTELLIGENCE
@@ -2255,33 +2255,11 @@ elif page == "10 · Rentabilidade & Descontos":
                 help="Hipótese de volume mantido após o reajuste. Não é uma elasticidade estimada a partir dos dados.",
             )
 
-        sim = filtered.copy()
-        sim["volume_base_sim"] = pd.to_numeric(sim["quantidade_real"], errors="coerce").fillna(0).clip(lower=0)
-        sim["preco_base_sim"] = pd.to_numeric(sim["preco_liquido_unitario"], errors="coerce").fillna(0)
-        sim["preco_orcado_sim"] = pd.to_numeric(sim["preco_liquido_orcado_unitario"], errors="coerce").fillna(0)
-        sim["custo_unitario_sim"] = pd.to_numeric(sim["custo_unitario_real"], errors="coerce").fillna(0)
-        sim["gap_positivo_sim"] = (sim["preco_orcado_sim"] - sim["preco_base_sim"]).clip(lower=0)
-        sim["sku_reajustado_sim"] = sim["gap_positivo_sim"] > 0
-        sim["ajuste_unitario_sim"] = sim["gap_positivo_sim"] * (gap_capture_pct / 100)
-        sim["gap_x_volume_sim"] = sim["gap_positivo_sim"] * sim["volume_base_sim"]
-        # Sem reajuste de preço, não deve haver perda de volume simulada.
-        sim["volume_cenario_sim"] = np.where(
-            sim["sku_reajustado_sim"] & (gap_capture_pct > 0),
-            sim["volume_base_sim"] * (volume_retention_pct / 100),
-            sim["volume_base_sim"],
+        sim = calcular_simulacao_recuperacao_margem(
+            filtered,
+            recuperacao_gap_pct=gap_capture_pct,
+            retencao_volume_pct=volume_retention_pct,
         )
-        sim["receita_base_sim"] = sim["preco_base_sim"] * sim["volume_base_sim"]
-        sim["receita_cenario_sim"] = (
-            sim["preco_base_sim"] + sim["ajuste_unitario_sim"]
-        ) * sim["volume_cenario_sim"]
-        sim["lucro_bruto_base_sim"] = (
-            sim["preco_base_sim"] - sim["custo_unitario_sim"]
-        ) * sim["volume_base_sim"]
-        sim["lucro_bruto_cenario_sim"] = (
-            sim["preco_base_sim"] + sim["ajuste_unitario_sim"] - sim["custo_unitario_sim"]
-        ) * sim["volume_cenario_sim"]
-        sim["variacao_receita_sim"] = sim["receita_cenario_sim"] - sim["receita_base_sim"]
-        sim["variacao_lucro_sim"] = sim["lucro_bruto_cenario_sim"] - sim["lucro_bruto_base_sim"]
 
         sku_sim = sim.groupby(["sku_id", "familia", "segmento"], dropna=False).agg(
             receita_base=("receita_base_sim", "sum"),
