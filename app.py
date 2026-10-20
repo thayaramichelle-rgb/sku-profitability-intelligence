@@ -519,15 +519,36 @@ def style_plot(fig, height=370, percent_axis=False, money_axis=False):
 
 @st.cache_data
 def load_data():
+    """Carrega o histórico completo ou recompõe a base a partir dos CSVs publicados."""
     path = DATA_DIR / "historico_skus.csv"
 
-    if not path.exists():
-        raise FileNotFoundError(
-            f"Não encontrei o arquivo: {path}. "
-            "Confirme se historico_skus.csv está dentro da pasta data."
+    # Localmente, prioriza o arquivo completo quando ele estiver disponível.
+    if path.is_file():
+        data = pd.read_csv(path, sep=";")
+    else:
+        # No Streamlit Cloud, usa as seis partes versionadas no GitHub.
+        partes = [
+            DATA_DIR / f"historico_skus_{i}.csv"
+            for i in range(1, 7)
+        ]
+        ausentes = [parte.name for parte in partes if not parte.is_file()]
+
+        if ausentes:
+            raise FileNotFoundError(
+                "Não foi possível localizar o histórico de SKUs. "
+                "Arquivos ausentes na pasta data: " + ", ".join(ausentes)
+            )
+
+        # Cada arquivo é lido com seu cabeçalho e as linhas são reunidas.
+        data = pd.concat(
+            [pd.read_csv(parte, sep=";") for parte in partes],
+            ignore_index=True,
         )
 
-    data = pd.read_csv(path, sep=";")
+        # Se as partes tiverem sido divididas com o cabeçalho repetido,
+        # remove eventuais linhas de cabeçalho que aparecerem como dados.
+        if "mes" in data.columns:
+            data = data[data["mes"].astype(str).str.strip().str.lower() != "mes"].copy()
 
     required = [
         "mes", "sku_id", "familia", "segmento",
@@ -578,7 +599,6 @@ def load_data():
         data["desconto_pct"] = np.nan
 
     return data
-
 
 try:
     hist = load_data()
