@@ -12,6 +12,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from cenarios import aplicar_cenarios_controlados
+
 
 # Configuracoes gerais: manter a semente fixa torna a base reproduzivel.
 SEMENTE = 42
@@ -118,28 +120,9 @@ def gerar_base() -> tuple[pd.DataFrame, pd.DataFrame]:
         tendencia_sku, -0.004, 0.007
     )
 
-    # Grupos de teste mutuamente exclusivos.
-    # Ajudam a conferir se o diagnostico encontra os problemas
-    # inseridos de forma controlada.
-    ordem = rng.permutation(QTD_SKUS)
-
-    limites = {
-        "Aumento de custo": int(QTD_SKUS * 0.10),
-        "Pressao de preco": int(QTD_SKUS * 0.08),
-        "Queda de volume": int(QTD_SKUS * 0.08),
-        "Deterioracao combinada": int(QTD_SKUS * 0.05),
-    }
-
-    inicio = 0
-
-    for cenario, tamanho in limites.items():
-        indices = ordem[inicio:inicio + tamanho]
-
-        cadastro.loc[
-            indices, "cenario_simulado"
-        ] = cenario
-
-        inicio += tamanho
+    # Os cenários controlados são aplicados de forma estratificada
+    # depois da geração da base, garantindo exatamente 2.000 SKUs afetados.
+    cadastro["cenario_simulado"] = "Sem desvio induzido"
 
     historico = []
 
@@ -157,22 +140,6 @@ def gerar_base() -> tuple[pd.DataFrame, pd.DataFrame]:
                 (indice_mes % 12) / 12 * 2 * np.pi
             )
         )
-
-        ruido_volume = rng.lognormal(
-            mean=-0.5 * 0.10**2,
-            sigma=0.10,
-            size=QTD_SKUS
-        )
-
-        quantidade_real = np.maximum(
-            0,
-            np.rint(
-                quantidade_base
-                * fator_tendencia
-                * sazonalidade
-                * ruido_volume
-            )
-        ).astype(int)
 
         # Orcamento: referencia planejada antes dos desvios.
         quantidade_orcada = np.maximum(
@@ -198,98 +165,15 @@ def gerar_base() -> tuple[pd.DataFrame, pd.DataFrame]:
             custo_base * (1 + 0.0018 * indice_mes)
         )
 
-        # Realizado: pequenas variacoes organicas de preco,
-        # desconto e custo.
-        preco_lista_real = (
-            preco_base
-            * (1 + 0.0013 * indice_mes)
-            * rng.normal(1.0, 0.008, QTD_SKUS)
-        )
-
-        desconto_real = np.clip(
-            desconto_base
-            + rng.normal(0, 0.006, QTD_SKUS),
-            0.0,
-            0.22
-        )
-
-        custo_unitario_real = (
-            custo_base
-            * (1 + 0.0020 * indice_mes)
-            * rng.normal(1.0, 0.012, QTD_SKUS)
-        )
-
-        # O cenario so e aplicado no periodo final.
-        periodo_com_desvio = (
-            indice_mes >= QTD_MESES - 6
-        )
-
-        cenarios = cadastro[
-            "cenario_simulado"
-        ].to_numpy()
-
-        if periodo_com_desvio:
-
-            mascara_custo = np.isin(
-                cenarios,
-                [
-                    "Aumento de custo",
-                    "Deterioracao combinada"
-                ]
-            )
-
-            mascara_preco = np.isin(
-                cenarios,
-                [
-                    "Pressao de preco",
-                    "Deterioracao combinada"
-                ]
-            )
-
-            mascara_volume = np.isin(
-                cenarios,
-                [
-                    "Queda de volume",
-                    "Deterioracao combinada"
-                ]
-            )
-
-            custo_unitario_real[mascara_custo] *= np.where(
-                cenarios[mascara_custo]
-                == "Deterioracao combinada",
-                1.08,
-                1.10
-            )
-
-            # Reduz o preco liquido efetivo.
-            # A pressao fica registrada em coluna propria.
-            pressao_preco_pct = np.zeros(QTD_SKUS)
-
-            pressao_preco_pct[mascara_preco] = np.where(
-                cenarios[mascara_preco]
-                == "Deterioracao combinada",
-                0.04,
-                0.07
-            )
-
-            quantidade_real[mascara_volume] = np.rint(
-                quantidade_real[mascara_volume]
-                * np.where(
-                    cenarios[mascara_volume]
-                    == "Deterioracao combinada",
-                    0.82,
-                    0.75
-                )
-            ).astype(int)
-
-        else:
-            pressao_preco_pct = np.zeros(QTD_SKUS)
-
-        preco_liquido_real = (
-            preco_lista_real
-            * (1 - desconto_real)
-            * (1 - pressao_preco_pct)
-        )
+        # A base começa alinhada ao orçamento. Os desvios controlados são
+        # injetados por aplicar_cenarios_controlados após montar os 24 meses.
+        quantidade_real = quantidade_orcada.copy()
+        preco_lista_real = preco_lista_orcado.copy()
+        desconto_real = desconto_orcado.copy()
+        custo_unitario_real = custo_unitario_orcado.copy()
+        pressao_preco_pct = np.zeros(QTD_SKUS)
+        preco_liquido_real = preco_liquido_orcado.copy()
+        cenarios = cadastro["cenario_simulado"].to_numpy()
 
         # Calculo dos indicadores financeiros realizados.
         receita_liquida_real = (
@@ -442,6 +326,14 @@ def gerar_base() -> tuple[pd.DataFrame, pd.DataFrame]:
         historico,
         ignore_index=True
     )
+
+    historico_df = aplicar_cenarios_controlados(historico_df)
+    cenarios_por_sku = (
+        historico_df[["sku_id", "cenario_simulado"]]
+        .drop_duplicates("sku_id")
+        .set_index("sku_id")["cenario_simulado"]
+    )
+    cadastro["cenario_simulado"] = cadastro["sku_id"].map(cenarios_por_sku)
 
     cadastro["preco_lista_base"] = preco_base.round(2)
     cadastro["custo_unitario_base"] = custo_base.round(2)
