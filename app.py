@@ -2053,12 +2053,12 @@ elif page == "10 · Rentabilidade & Descontos":
         c1, c2 = st.columns(2)
         with c1:
             st.plotly_chart(
-                px.bar(
+                style_plot(px.bar(
                     rent.sort_values("desvio_lucro"),
                     x=group_col, y="desvio_lucro",
                     title="Desvio de lucro bruto vs. orçamento",
-                    labels={group_col: level, "desvio_lucro": "Desvio de lucro bruto"},
-                ),
+                    labels={group_col: level, "desvio_lucro": "Desvio de lucro bruto (R$)"},
+                ).update_layout(paper_bgcolor=WHITE, plot_bgcolor=WHITE, font=dict(color=TEXT)), height=370, money_axis=True),
                 use_container_width=True,
             )
         with c2:
