@@ -2022,9 +2022,10 @@ elif page == "10 · Rentabilidade & Descontos":
         unsafe_allow_html=True,
     )
 
-    tab_portfolio, tab_discount = st.tabs([
+    tab_portfolio, tab_discount, tab_simulation = st.tabs([
         "Rentabilidade por família e segmento",
         "Oportunidade indicativa de preço",
+        "Simulador de recuperação de margem",
     ])
 
     with tab_portfolio:
@@ -2192,6 +2193,154 @@ elif page == "10 · Rentabilidade & Descontos":
             "Baixar oportunidades indicativas (CSV)",
             csv_bytes(opp_view),
             file_name="oportunidades_preco_sku.csv",
+            mime="text/csv",
+        )
+
+    with tab_simulation:
+        st.subheader("Simulação de recuperação de margem por ajuste de preço")
+        st.markdown(
+            '<div class="insight"><b>Simulação gerencial:</b> estima o efeito de recuperar parte da diferença positiva entre o preço orçado e o realizado nos SKUs abaixo do orçamento. '
+            'Considera custo unitário constante e uma hipótese de retenção de volume definida pelo usuário. Não estima elasticidade real nem garante recuperação financeira.</div>',
+            unsafe_allow_html=True,
+        )
+
+        sim_col1, sim_col2 = st.columns(2)
+        with sim_col1:
+            gap_capture_pct = st.slider(
+                "Parcela da diferença de preço a recuperar (%)",
+                min_value=0, max_value=100, value=25, step=5,
+                key="margin_sim_gap_capture",
+                help="Percentual do gap positivo entre preço orçado e realizado que seria recuperado no cenário.",
+            )
+        with sim_col2:
+            volume_retention_pct = st.slider(
+                "Retenção de volume nos SKUs reajustados (%)",
+                min_value=70, max_value=100, value=95, step=1,
+                key="margin_sim_volume_retention",
+                help="Hipótese de volume mantido após o reajuste. Não é uma elasticidade estimada a partir dos dados.",
+            )
+
+        sim = filtered.copy()
+        sim["volume_base_sim"] = pd.to_numeric(sim["quantidade_real"], errors="coerce").fillna(0).clip(lower=0)
+        sim["preco_base_sim"] = pd.to_numeric(sim["preco_liquido_unitario"], errors="coerce").fillna(0)
+        sim["preco_orcado_sim"] = pd.to_numeric(sim["preco_liquido_orcado_unitario"], errors="coerce").fillna(0)
+        sim["custo_unitario_sim"] = pd.to_numeric(sim["custo_unitario_real"], errors="coerce").fillna(0)
+        sim["gap_positivo_sim"] = (sim["preco_orcado_sim"] - sim["preco_base_sim"]).clip(lower=0)
+        sim["sku_reajustado_sim"] = sim["gap_positivo_sim"] > 0
+        sim["ajuste_unitario_sim"] = sim["gap_positivo_sim"] * (gap_capture_pct / 100)
+        sim["volume_cenario_sim"] = np.where(
+            sim["sku_reajustado_sim"],
+            sim["volume_base_sim"] * (volume_retention_pct / 100),
+            sim["volume_base_sim"],
+        )
+        sim["receita_base_sim"] = sim["preco_base_sim"] * sim["volume_base_sim"]
+        sim["receita_cenario_sim"] = (
+            sim["preco_base_sim"] + sim["ajuste_unitario_sim"]
+        ) * sim["volume_cenario_sim"]
+        sim["lucro_bruto_base_sim"] = (
+            sim["preco_base_sim"] - sim["custo_unitario_sim"]
+        ) * sim["volume_base_sim"]
+        sim["lucro_bruto_cenario_sim"] = (
+            sim["preco_base_sim"] + sim["ajuste_unitario_sim"] - sim["custo_unitario_sim"]
+        ) * sim["volume_cenario_sim"]
+        sim["variacao_receita_sim"] = sim["receita_cenario_sim"] - sim["receita_base_sim"]
+        sim["variacao_lucro_sim"] = sim["lucro_bruto_cenario_sim"] - sim["lucro_bruto_base_sim"]
+
+        sku_sim = sim.groupby(["sku_id", "familia", "segmento"], dropna=False).agg(
+            receita_base=("receita_base_sim", "sum"),
+            receita_cenario=("receita_cenario_sim", "sum"),
+            lucro_base=("lucro_bruto_base_sim", "sum"),
+            lucro_cenario=("lucro_bruto_cenario_sim", "sum"),
+            variacao_receita=("variacao_receita_sim", "sum"),
+            variacao_lucro_bruto=("variacao_lucro_sim", "sum"),
+            volume_base=("volume_base_sim", "sum"),
+            volume_cenario=("volume_cenario_sim", "sum"),
+            gap_preco_medio=("gap_positivo_sim", "mean"),
+            linhas_com_gap=("sku_reajustado_sim", "sum"),
+        ).reset_index()
+        sku_sim["margem_base_pct"] = np.where(
+            sku_sim["receita_base"] != 0,
+            sku_sim["lucro_base"] / sku_sim["receita_base"] * 100,
+            np.nan,
+        )
+        sku_sim["margem_cenario_pct"] = np.where(
+            sku_sim["receita_cenario"] != 0,
+            sku_sim["lucro_cenario"] / sku_sim["receita_cenario"] * 100,
+            np.nan,
+        )
+        sku_sim["sku_com_gap"] = sku_sim["linhas_com_gap"] > 0
+        sku_sim = sku_sim.sort_values("variacao_lucro_bruto", ascending=False)
+
+        total_variacao_lucro = float(sim["variacao_lucro_sim"].sum())
+        total_variacao_receita = float(sim["variacao_receita_sim"].sum())
+        skus_com_gap = int(sim.loc[sim["sku_reajustado_sim"], "sku_id"].nunique())
+        k1, k2, k3 = st.columns(3)
+        k1.metric("Variação estimada do lucro bruto", money(total_variacao_lucro))
+        k2.metric("Variação estimada da receita", money(total_variacao_receita))
+        k3.metric("SKUs com preço abaixo do orçamento", number(skus_com_gap))
+
+        st.caption(
+            f"Cenário: recuperação de {gap_capture_pct}% do gap positivo e retenção de volume de "
+            f"{volume_retention_pct}%. A variação considera perda de volume apenas nos registros com gap positivo; "
+            "os demais permanecem com o volume realizado. O cálculo é indicativo e mantém o custo unitário constante."
+        )
+
+        sim_chart = sku_sim[sku_sim["sku_com_gap"]].head(15).sort_values("variacao_lucro_bruto")
+        if not sim_chart.empty:
+            st.plotly_chart(
+                style_plot(
+                    px.bar(
+                        sim_chart,
+                        x="variacao_lucro_bruto",
+                        y="sku_id",
+                        orientation="h",
+                        color="familia",
+                        title="SKUs prioritários por variação estimada do lucro bruto",
+                        labels={
+                            "variacao_lucro_bruto": "Variação estimada do lucro bruto (R$)",
+                            "sku_id": "SKU",
+                            "familia": "Família",
+                        },
+                    ).update_layout(paper_bgcolor=WHITE, plot_bgcolor=WHITE, font=dict(color=TEXT)),
+                    height=440,
+                    money_axis=True,
+                ),
+                use_container_width=True,
+            )
+        else:
+            st.info("Não há SKUs com preço realizado abaixo do orçamento no período e nos filtros selecionados.")
+
+        sim_view = sku_sim[[
+            "sku_id", "familia", "segmento", "receita_base", "receita_cenario",
+            "variacao_receita", "lucro_base", "lucro_cenario", "variacao_lucro_bruto",
+            "margem_base_pct", "margem_cenario_pct", "volume_base", "volume_cenario",
+            "gap_preco_medio", "sku_com_gap",
+        ]].rename(columns={
+            "sku_id": "SKU",
+            "familia": "Família",
+            "segmento": "Segmento",
+            "receita_base": "Receita base simulada",
+            "receita_cenario": "Receita no cenário",
+            "variacao_receita": "Variação estimada da receita",
+            "lucro_base": "Lucro bruto base simulado",
+            "lucro_cenario": "Lucro bruto no cenário",
+            "variacao_lucro_bruto": "Variação estimada do lucro bruto",
+            "margem_base_pct": "Margem base simulada (%)",
+            "margem_cenario_pct": "Margem no cenário (%)",
+            "volume_base": "Volume base",
+            "volume_cenario": "Volume no cenário",
+            "gap_preco_medio": "Gap positivo médio de preço",
+            "sku_com_gap": "Possui gap positivo",
+        })
+        show_table(
+            sim_view,
+            height=500,
+            key="margin_recovery_simulation_table",
+        )
+        st.download_button(
+            "Baixar simulação de recuperação de margem (CSV)",
+            csv_bytes(sim_view),
+            file_name="simulacao_recuperacao_margem.csv",
             mime="text/csv",
         )
 
