@@ -2301,9 +2301,8 @@ elif page == "10 · Rentabilidade & Descontos":
                             "sku_id": "SKU",
                             "familia": "Família",
                         },
-                    ).update_layout(paper_bgcolor=WHITE, plot_bgcolor=WHITE, font=dict(color=TEXT)),
+                    ).update_layout(paper_bgcolor=WHITE, plot_bgcolor=WHITE, font=dict(color=TEXT)).update_xaxes(tickprefix="R$ ", tickformat=",.2f"),
                     height=440,
-                    money_axis=True,
                 ),
                 use_container_width=True,
             )
