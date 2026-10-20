@@ -652,10 +652,10 @@ pages = [
     "04 · Portfolio Intelligence",
     "05 · SKU Investigation",
     "06 · Gap & Risk Diagnosis",
-    "07 · Action Plan & Opportunities",
-    "08 · Data Quality & Methodology",
-    "09 · Pricing Lab",
-    "10 · Rentabilidade & Descontos",
+    "07 · Pricing Lab",
+    "08 · Rentabilidade & Descontos",
+    "09 · Action Plan & Opportunities",
+    "10 · Data Quality & Methodology",
 ]
 
 st.sidebar.title("SKU PROFITABILITY")
@@ -1547,8 +1547,69 @@ elif page == "06 · Gap & Risk Diagnosis":
 # 07 — ACTION PLAN & OPPORTUNITIES
 # ==========================================================
 
-elif page == "07 · Action Plan & Opportunities":
+elif page == "09 · Action Plan & Opportunities":
     kpi_row()
+
+    # Síntese executiva que consolida os principais achados das análises anteriores.
+    st.subheader("Síntese integrada das análises")
+    st.caption(
+        "Resumo do recorte filtrado: desempenho financeiro, concentração dos gaps "
+        "e sinais para priorização. Os componentes são decomposições aritméticas, "
+        "não comprovação de causa."
+    )
+
+    negative_skus = sku_summary[sku_summary["desvio_lucro"] < 0]
+    recurring_skus = sku_summary[
+        (sku_summary["desvio_lucro"] < 0) & (sku_summary["recorrencia_gap"] >= 0.5)
+    ]
+    s1, s2, s3, s4 = st.columns(4)
+    s1.metric("Gap total de lucro bruto", money(total["desvio_lucro"]))
+    s2.metric("Gap de margem bruta", percentage_points(total["desvio_margem_pp"]))
+    s3.metric("SKUs com gap negativo", number(negative_skus["sku_id"].nunique()))
+    s4.metric("SKUs com gap recorrente", number(recurring_skus["sku_id"].nunique()),
+              help="SKUs com gap de lucro em pelo menos metade dos meses do recorte.")
+
+    bridge_summary = pd.DataFrame({
+        "Componente": ["Preço", "Volume", "Custo", "Interações / residual"],
+        "Impacto estimado (R$)": [
+            filtered["efeito_preco"].sum(),
+            filtered["efeito_volume"].sum(),
+            filtered["efeito_custo"].sum(),
+            filtered["residual_decomposicao"].sum(),
+        ],
+    }).sort_values("Impacto estimado (R$)")
+
+    left_summary, right_summary = st.columns(2)
+    with left_summary:
+        st.markdown("**Principais sinais do Profit Bridge**")
+        show_table(bridge_summary, height=250, key="action_integrated_bridge")
+    with right_summary:
+        st.markdown("**Onde o gap de lucro mais se concentra**")
+        family_top = family_summary.sort_values("desvio_lucro").head(5)[
+            ["familia", "skus", "desvio_lucro"]
+        ].rename(columns={
+            "familia": "Família", "skus": "SKUs", "desvio_lucro": "Gap lucro (R$)"
+        })
+        show_table(family_top, height=250, key="action_integrated_family")
+
+    segment_top = summarize(filtered, ["segmento"]).sort_values("desvio_lucro").head(5)[
+        ["segmento", "skus", "desvio_lucro", "desvio_margem_pp"]
+    ].rename(columns={
+        "segmento": "Segmento", "skus": "SKUs",
+        "desvio_lucro": "Gap lucro (R$)", "desvio_margem_pp": "Gap margem (p.p.)"
+    })
+    st.markdown("**Segmentos prioritários para revisão comercial**")
+    show_table(segment_top, height=260, key="action_integrated_segment")
+
+    st.markdown(
+        '<div class="insight"><b>Leitura recomendada:</b> priorize primeiro os '
+        'segmentos e SKUs com maior impacto negativo e recorrência; use os sinais '
+        'de preço, volume e custo para orientar a investigação; valide a hipótese '
+        'com as áreas responsáveis antes de estabelecer metas de recuperação.</div>',
+        unsafe_allow_html=True,
+    )
+    st.divider()
+
     actions = sku_summary[sku_summary["desvio_lucro"] < 0].copy()
     actions = actions.sort_values("desvio_lucro")
     actions["Exposição potencial (R$)"] = -actions["desvio_lucro"]
@@ -1640,7 +1701,7 @@ elif page == "07 · Action Plan & Opportunities":
 # 09 — PRICING LAB: SIMULADOR, PVM E DISPERSÃO TEMPORAL
 # ==========================================================
 
-elif page == "09 · Pricing Lab":
+elif page == "07 · Pricing Lab":
     kpi_row()
     st.markdown(
         '<div class="insight"><b>Pricing Lab:</b> use os cenários como apoio à decisão, '
@@ -2018,7 +2079,7 @@ elif page == "09 · Pricing Lab":
 # 08 — DATA QUALITY & METHODOLOGY
 # ==========================================================
 
-elif page == "10 · Rentabilidade & Descontos":
+elif page == "08 · Rentabilidade & Descontos":
     kpi_row()
     st.title("Rentabilidade & Descontos")
     st.markdown(
@@ -2363,7 +2424,7 @@ elif page == "10 · Rentabilidade & Descontos":
             mime="text/csv",
         )
 
-elif page == "08 · Data Quality & Methodology":
+elif page == "10 · Data Quality & Methodology":
     st.subheader("Qualidade e cobertura dos dados")
 
     quality = pd.DataFrame({
