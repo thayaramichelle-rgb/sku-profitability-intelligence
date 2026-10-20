@@ -2063,7 +2063,7 @@ elif page == "10 · Rentabilidade & Descontos":
             )
         with c2:
             st.plotly_chart(
-                px.scatter(
+                style_plot(px.scatter(
                     rent,
                     x="desconto_medio_pct", y="margem_real_pct",
                     size="receita_real", color="desvio_lucro",
@@ -2072,10 +2072,10 @@ elif page == "10 · Rentabilidade & Descontos":
                     labels={
                         "desconto_medio_pct": "Desconto médio (%)",
                         "margem_real_pct": "Margem bruta realizada (%)",
-                        "desvio_lucro": "Desvio de lucro",
-                        "receita_real": "Receita realizada",
+                        "desvio_lucro": "Desvio de lucro (R$)",
+                        "receita_real": "Receita realizada (R$)",
                     },
-                ),
+                ).update_layout(paper_bgcolor=WHITE, plot_bgcolor=WHITE, font=dict(color=TEXT)), height=370),
                 use_container_width=True,
             )
         rent_view = rent[[
@@ -2097,25 +2097,14 @@ elif page == "10 · Rentabilidade & Descontos":
             "desconto_medio_pct": "Desconto médio (%)",
             "oportunidade_preco_indicativa": "Oportunidade indicativa de preço",
         })
-        st.dataframe(
+        show_table(
             rent_view.sort_values("Desvio margem (p.p.)"),
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Receita realizada": st.column_config.NumberColumn(format="R$ %.2f"),
-                "Receita orçada": st.column_config.NumberColumn(format="R$ %.2f"),
-                "Lucro bruto realizado": st.column_config.NumberColumn(format="R$ %.2f"),
-                "Lucro bruto orçado": st.column_config.NumberColumn(format="R$ %.2f"),
-                "Margem realizada (%)": st.column_config.NumberColumn(format="%.2f%%"),
-                "Margem orçada (%)": st.column_config.NumberColumn(format="%.2f%%"),
-                "Desvio margem (p.p.)": st.column_config.NumberColumn(format="%.2f"),
-                "Desconto médio (%)": st.column_config.NumberColumn(format="%.2f%%"),
-                "Oportunidade indicativa de preço": st.column_config.NumberColumn(format="R$ %.2f"),
-            },
+            height=430,
+            key="rentabilidade_family_segment_table",
         )
         st.download_button(
             "Baixar análise por família/segmento (CSV)",
-            rent_view.to_csv(index=False).encode("utf-8-sig"),
+            csv_bytes(rent_view),
             file_name="rentabilidade_familias_segmentos.csv",
             mime="text/csv",
         )
@@ -2162,7 +2151,7 @@ elif page == "10 · Rentabilidade & Descontos":
         k2.metric("SKUs com diferença positiva", int((opp["oportunidade_preco_indicativa"] > 0).sum()))
         k3.metric("Receita realizada dos SKUs", money(opp["receita_real"].sum()))
         st.plotly_chart(
-            px.bar(
+            style_plot(px.bar(
                 opp_top.sort_values("oportunidade_preco_indicativa"),
                 x="oportunidade_preco_indicativa", y="sku_id", orientation="h",
                 color="familia",
@@ -2172,7 +2161,7 @@ elif page == "10 · Rentabilidade & Descontos":
                     "sku_id": "SKU",
                     "familia": "Família",
                 },
-            ),
+            ).update_layout(paper_bgcolor=WHITE, plot_bgcolor=WHITE, font=dict(color=TEXT)).update_xaxes(tickprefix="R$ ", tickformat=",.0f"), height=440),
             use_container_width=True,
         )
         opp_view = opp[[
@@ -2189,29 +2178,19 @@ elif page == "10 · Rentabilidade & Descontos":
             "preco_real_medio": "Preço realizado médio",
             "preco_orcado_medio": "Preço orçado médio",
             "gap_preco_pct": "Diferença preço vs. orçamento (%)",
-            "desconto_medio": "Desconto médio",
+            "desconto_medio": "Desconto médio (%)",
             "desvio_lucro": "Desvio de lucro bruto",
             "oportunidade_preco_indicativa": "Oportunidade indicativa (R$)",
             "receita_preco_orcado_volume_real": "Receita a preço orçado e volume real",
         })
-        st.dataframe(
+        show_table(
             opp_view.head(top_n),
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Receita realizada": st.column_config.NumberColumn(format="R$ %.2f"),
-                "Preço realizado médio": st.column_config.NumberColumn(format="R$ %.2f"),
-                "Preço orçado médio": st.column_config.NumberColumn(format="R$ %.2f"),
-                "Diferença preço vs. orçamento (%)": st.column_config.NumberColumn(format="%.2f%%"),
-                "Desconto médio": st.column_config.NumberColumn(format="%.2f%%"),
-                "Desvio de lucro bruto": st.column_config.NumberColumn(format="R$ %.2f"),
-                "Oportunidade indicativa (R$)": st.column_config.NumberColumn(format="R$ %.2f"),
-                "Receita a preço orçado e volume real": st.column_config.NumberColumn(format="R$ %.2f"),
-            },
+            height=500,
+            key="price_opportunity_table",
         )
         st.download_button(
             "Baixar oportunidades indicativas (CSV)",
-            opp_view.to_csv(index=False).encode("utf-8-sig"),
+            csv_bytes(opp_view),
             file_name="oportunidades_preco_sku.csv",
             mime="text/csv",
         )
