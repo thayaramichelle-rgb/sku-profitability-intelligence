@@ -1,0 +1,25 @@
+name: Validate SKU Profitability Intelligence
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install validation dependencies
+        run: python -m pip install --upgrade pip numpy pandas
+      - name: Compile application and generator
+        run: python -m py_compile app.py gerar_base.py cenarios.py tests/test_cenarios.py
+      - name: Run financial calculation tests
+        run: python -m unittest discover -s tests -v
