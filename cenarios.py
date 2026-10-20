@@ -21,6 +21,56 @@ ISSUE_LABELS = (
 )
 
 
+def calcular_simulacao_recuperacao_margem(
+    data: pd.DataFrame,
+    recuperacao_gap_pct: float,
+    retencao_volume_pct: float,
+) -> pd.DataFrame:
+    """Calculate a price-recovery scenario with an explicit volume-retention assumption."""
+    if not 0 <= recuperacao_gap_pct <= 100:
+        raise ValueError("A recuperação do gap deve estar entre 0% e 100%.")
+    if not 0 <= retencao_volume_pct <= 100:
+        raise ValueError("A retenção de volume deve estar entre 0% e 100%.")
+
+    required = {
+        "quantidade_real", "preco_liquido_unitario",
+        "preco_liquido_orcado_unitario", "custo_unitario_real",
+    }
+    missing = sorted(required - set(data.columns))
+    if missing:
+        raise ValueError("Colunas ausentes para simular recuperação de margem: " + ", ".join(missing))
+
+    sim = data.copy()
+    sim["volume_base_sim"] = pd.to_numeric(sim["quantidade_real"], errors="coerce").fillna(0).clip(lower=0)
+    sim["preco_base_sim"] = pd.to_numeric(sim["preco_liquido_unitario"], errors="coerce").fillna(0)
+    sim["preco_orcado_sim"] = pd.to_numeric(sim["preco_liquido_orcado_unitario"], errors="coerce").fillna(0)
+    sim["custo_unitario_sim"] = pd.to_numeric(sim["custo_unitario_real"], errors="coerce").fillna(0)
+    sim["gap_positivo_sim"] = (sim["preco_orcado_sim"] - sim["preco_base_sim"]).clip(lower=0)
+    sim["sku_reajustado_sim"] = sim["gap_positivo_sim"] > 0
+    sim["ajuste_unitario_sim"] = sim["gap_positivo_sim"] * (recuperacao_gap_pct / 100)
+    sim["gap_x_volume_sim"] = sim["gap_positivo_sim"] * sim["volume_base_sim"]
+
+    # No price adjustment means no simulated volume loss.
+    sim["volume_cenario_sim"] = np.where(
+        sim["sku_reajustado_sim"] & (recuperacao_gap_pct > 0),
+        sim["volume_base_sim"] * (retencao_volume_pct / 100),
+        sim["volume_base_sim"],
+    )
+    sim["receita_base_sim"] = sim["preco_base_sim"] * sim["volume_base_sim"]
+    sim["receita_cenario_sim"] = (
+        sim["preco_base_sim"] + sim["ajuste_unitario_sim"]
+    ) * sim["volume_cenario_sim"]
+    sim["lucro_bruto_base_sim"] = (
+        sim["preco_base_sim"] - sim["custo_unitario_sim"]
+    ) * sim["volume_base_sim"]
+    sim["lucro_bruto_cenario_sim"] = (
+        sim["preco_base_sim"] + sim["ajuste_unitario_sim"] - sim["custo_unitario_sim"]
+    ) * sim["volume_cenario_sim"]
+    sim["variacao_receita_sim"] = sim["receita_cenario_sim"] - sim["receita_base_sim"]
+    sim["variacao_lucro_sim"] = sim["lucro_bruto_cenario_sim"] - sim["lucro_bruto_base_sim"]
+    return sim
+
+
 def _select_stratified_skus(master: pd.DataFrame, target_count: int, rng) -> list[str]:
     """Select exactly target_count SKUs proportionally within family/segment strata."""
     groups = list(master.groupby(["familia", "segmento"], dropna=False, sort=True).indices.items())
