@@ -315,7 +315,7 @@ def download_csv(data, label, filename, key):
 
 MONEY_WORDS = (
     "receita", "lucro", "custo", "preço", "preco",
-    "impacto", "exposição", "exposicao", "gap receita",
+    "impacto", "efeito", "residual", "exposição", "exposicao", "gap receita",
     "gap lucro", "valor financeiro", "orçamento financeiro",
     "orcamento financeiro",
 )
@@ -1549,16 +1549,20 @@ elif page == "07 · Action Plan & Opportunities":
     actions["Exposição potencial (R$)"] = -actions["desvio_lucro"]
 
     action_text = {
-        "Investigar custo unitário":
-            "Comparar custo real e orçamento; revisar consumo, perdas, compras e eficiência.",
-        "Investigar preço e descontos":
-            "Revisar preço líquido, descontos concedidos e condições comerciais.",
-        "Investigar volume":
-            "Avaliar demanda, disponibilidade, carteira e execução comercial.",
-        "Investigar mix e outros fatores":
-            "Comparar com SKUs semelhantes e decompor os fatores do desvio.",
+        "Sinal: aumento de custo (validar)":
+            "Comparar custo unitário real e orçado; investigar compras, consumo, perdas e eficiência.",
+        "Sinal: pressão de preço (validar)":
+            "Validar preço líquido, descontos, condições comerciais e posicionamento de preço.",
+        "Sinal: efeito de volume (validar)":
+            "Validar variação de volume, demanda, disponibilidade, carteira e execução comercial.",
+        "Sinal: interações/outros fatores (validar)":
+            "Analisar mix, interações e fatores não representados na decomposição simplificada.",
+        "Sem gap negativo: monitorar desempenho":
+            "Monitorar a evolução da margem e confirmar se o desempenho favorável se mantém.",
     }
-    actions["Próxima investigação"] = actions["hipotese"].map(action_text)
+    actions["Próxima investigação"] = actions["hipotese"].map(action_text).fillna(
+        "Validar dados e decomposição antes de concluir a causa do desvio."
+    )
     actions["Status"] = "A investigar"
 
     a, b, c = st.columns(3)
