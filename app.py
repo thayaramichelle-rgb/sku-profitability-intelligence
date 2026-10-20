@@ -2127,12 +2127,12 @@ elif page == "10 · Rentabilidade & Descontos":
         show_table(
             rent_view.sort_values("Desvio margem (p.p.)"),
             height=430,
-            key="rentabilidade_family_segment_table",
+            key="rentabilidade_segment_table",
         )
         st.download_button(
-            "Baixar análise por família/segmento (CSV)",
+            "Baixar rentabilidade por segmento (CSV)",
             csv_bytes(rent_view),
-            file_name="rentabilidade_familias_segmentos.csv",
+            file_name="rentabilidade_por_segmento.csv",
             mime="text/csv",
         )
 
