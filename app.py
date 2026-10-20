@@ -651,6 +651,7 @@ pages = [
     "06 · Gap & Risk Diagnosis",
     "07 · Action Plan & Opportunities",
     "08 · Data Quality & Methodology",
+    "09 · Pricing Lab",
 ]
 
 st.sidebar.title("SKU PROFITABILITY")
@@ -1629,6 +1630,381 @@ elif page == "07 · Action Plan & Opportunities":
         priority_summary, "Baixar resumo por prioridade em CSV",
         "exposicao_por_prioridade.csv", "download_priority_summary",
     )
+
+
+# ==========================================================
+# 09 — PRICING LAB: SIMULADOR, PVM E DISPERSÃO TEMPORAL
+# ==========================================================
+
+elif page == "09 · Pricing Lab":
+    kpi_row()
+    st.markdown(
+        '<div class="insight"><b>Pricing Lab:</b> use os cenários como apoio à decisão, '
+        'não como previsão garantida. A elasticidade é uma premissa editável pelo usuário; '
+        'não é estimada automaticamente por esta base sintética.</div>',
+        unsafe_allow_html=True,
+    )
+
+    tab_sim, tab_pvm, tab_disp = st.tabs([
+        "Simulador de preço e margem",
+        "Price-Volume-Mix",
+        "Dispersão temporal de preços",
+    ])
+
+    # ------------------------------------------------------
+    # SIMULADOR DE PREÇO
+    # ------------------------------------------------------
+    with tab_sim:
+        st.subheader("Simulação de preço, demanda e rentabilidade")
+        st.caption(
+            "O cenário parte dos resultados agregados do SKU no período filtrado. "
+            "O efeito de volume é estimado pela elasticidade informada, mantendo as demais "
+            "condições constantes, exceto a variação de custo selecionada."
+        )
+
+        sku_options = sorted(sku_summary["sku_id"].astype(str).unique().tolist())
+        selected_pricing_sku = st.selectbox(
+            "SKU para simulação",
+            sku_options,
+            key="pricing_lab_sku",
+        )
+        pr = sku_summary[sku_summary["sku_id"].astype(str) == selected_pricing_sku].iloc[0]
+
+        qty_base = float(pr["volume_real"]) if pd.notna(pr["volume_real"]) else 0.0
+        revenue_base = float(pr["receita_real"]) if pd.notna(pr["receita_real"]) else 0.0
+        gross_profit_base = float(pr["lucro_real"]) if pd.notna(pr["lucro_real"]) else 0.0
+        cost_base = float(pr["custo_real"]) if pd.notna(pr["custo_real"]) else 0.0
+
+        if qty_base <= 0 or revenue_base <= 0:
+            st.warning(
+                "Este SKU não tem volume e receita realizados positivos no período. "
+                "Selecione outro SKU para executar a simulação."
+            )
+        else:
+            price_base = revenue_base / qty_base
+            cost_unit_base = cost_base / qty_base
+            gross_profit_unit_base = gross_profit_base / qty_base
+            margin_base = gross_profit_base / revenue_base if revenue_base else np.nan
+
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                price_change_pct = st.slider(
+                    "Variação de preço (%)", -20, 30, 5, 1,
+                    key="pricing_price_change",
+                )
+            with c2:
+                elasticity = st.slider(
+                    "Elasticidade-preço assumida",
+                    min_value=-3.0, max_value=0.0, value=-1.0, step=0.1,
+                    key="pricing_elasticity",
+                    help="Ex.: -1,0 significa que uma alta de 1% no preço corresponde aproximadamente a queda de 1% no volume, localmente.",
+                )
+            with c3:
+                cost_change_pct = st.slider(
+                    "Variação do custo unitário (%)", -20, 50, 0, 1,
+                    key="pricing_cost_change",
+                )
+
+            target_margin_pct = st.slider(
+                "Margem bruta-alvo (%)", 5, 70, 30, 1,
+                key="pricing_target_margin",
+            )
+
+            price_factor = 1 + price_change_pct / 100
+            # Modelo de elasticidade constante: quantidade relativa = preço relativo ^ elasticidade.
+            volume_factor = price_factor ** elasticity
+            projected_qty = qty_base * volume_factor
+            projected_price = price_base * price_factor
+            projected_cost_unit = cost_unit_base * (1 + cost_change_pct / 100)
+            projected_revenue = projected_price * projected_qty
+            projected_gross_profit_unit = (
+                gross_profit_unit_base
+                + (projected_price - price_base)
+                - (projected_cost_unit - cost_unit_base)
+            )
+            projected_gross_profit = projected_gross_profit_unit * projected_qty
+            projected_margin = (
+                projected_gross_profit / projected_revenue
+                if projected_revenue else np.nan
+            )
+            delta_profit = projected_gross_profit - gross_profit_base
+            delta_revenue = projected_revenue - revenue_base
+            target_margin = target_margin_pct / 100
+
+            if price_base > 0 and target_margin < 1:
+                target_price_change = (
+                    target_margin * price_base
+                    - gross_profit_unit_base
+                    + (projected_cost_unit - cost_unit_base)
+                ) / (price_base * (1 - target_margin))
+                target_price = price_base * (1 + target_price_change)
+            else:
+                target_price = np.nan
+
+            st.divider()
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric(
+                "Preço projetado por unidade",
+                money(projected_price),
+                f"{price_change_pct:+.0f}% vs. preço médio atual",
+            )
+            k2.metric(
+                "Receita projetada",
+                money(projected_revenue),
+                money(delta_revenue) + " vs. atual",
+            )
+            k3.metric(
+                "Lucro bruto projetado",
+                money(projected_gross_profit),
+                money(delta_profit) + " vs. atual",
+                delta_color="normal",
+            )
+            k4.metric(
+                "Margem bruta projetada",
+                percent(projected_margin),
+                percentage_points(projected_margin - margin_base)
+                if pd.notna(projected_margin) and pd.notna(margin_base) else None,
+                delta_color="normal",
+            )
+
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Volume projetado", number(projected_qty), f"{(volume_factor - 1) * 100:+.1f}% vs. atual")
+            m2.metric("Custo unitário projetado", money(projected_cost_unit))
+            m3.metric(
+                f"Preço indicativo para margem-alvo de {target_margin_pct}%",
+                money(target_price) if pd.notna(target_price) and target_price > 0 else "Não calculável",
+            )
+
+            scenario_rows = []
+            for pct in [-10, -5, 0, 5, 10, 15, 20]:
+                if pct <= -100:
+                    continue
+                factor = (1 + pct / 100) ** elasticity
+                q = qty_base * factor
+                p = price_base * (1 + pct / 100)
+                c = cost_unit_base * (1 + cost_change_pct / 100)
+                gp_unit = gross_profit_unit_base + (p - price_base) - (c - cost_unit_base)
+                rev = p * q
+                gp = gp_unit * q
+                scenario_rows.append({
+                    "Variação de preço (%)": pct,
+                    "Volume projetado": q,
+                    "Preço unitário (R$)": p,
+                    "Receita projetada (R$)": rev,
+                    "Lucro bruto projetado (R$)": gp,
+                    "Margem bruta projetada (%)": gp / rev * 100 if rev else np.nan,
+                    "Variação de lucro (R$)": gp - gross_profit_base,
+                })
+            scenario_table = pd.DataFrame(scenario_rows)
+            fig_sens = px.line(
+                scenario_table,
+                x="Variação de preço (%)",
+                y="Lucro bruto projetado (R$)",
+                markers=True,
+                title="Sensibilidade do lucro bruto ao preço",
+            )
+            fig_sens.add_hline(
+                y=gross_profit_base,
+                line_dash="dash",
+                annotation_text="Lucro atual",
+            )
+            fig_sens.update_yaxes(tickprefix="R$ ", tickformat=",.0f")
+            st.plotly_chart(style_plot(fig_sens, height=360), width="stretch")
+            show_table(scenario_table, key="pricing_sensitivity_table")
+            download_csv(
+                scenario_table, "Baixar cenários de preço em CSV",
+                f"pricing_scenarios_{selected_pricing_sku}.csv",
+                "download_pricing_scenarios",
+            )
+            st.caption(
+                "Limites: o lucro projetado parte do lucro bruto observado por unidade e ajusta "
+                "preço e custo unitário. Não incorpora capacidade produtiva, reação competitiva, "
+                "contratos, impostos, custos fixos ou mudanças no mix. O preço indicativo é "
+                "matemático, não uma recomendação automática de reajuste."
+            )
+
+    # ------------------------------------------------------
+    # PRICE-VOLUME-MIX
+    # ------------------------------------------------------
+    with tab_pvm:
+        st.subheader("Ponte de rentabilidade: preço, volume, mix e custo")
+        st.caption(
+            "A ponte compara o realizado ao orçamento no recorte selecionado. "
+            "Os efeitos são decomposições aritméticas; o residual deve ser investigado."
+        )
+
+        pvm = filtered.groupby("sku_id", as_index=False).agg(
+            familia=("familia", "first"),
+            receita_real=("receita_liquida_real", "sum"),
+            receita_orcada=("receita_liquida_orcada", "sum"),
+            volume_real=("quantidade_real", "sum"),
+            volume_orcado=("quantidade_orcada", "sum"),
+            custo_real=("custo_produtos_real", "sum"),
+            custo_orcado=("custo_produtos_orcado", "sum"),
+            lucro_real=("lucro_bruto_real", "sum"),
+            lucro_orcado=("lucro_bruto_orcado", "sum"),
+        )
+        pvm = pvm[
+            (pvm["volume_real"] >= 0)
+            & (pvm["volume_orcado"] > 0)
+        ].copy()
+
+        pvm["preco_real_unit"] = np.where(
+            pvm["volume_real"] > 0, pvm["receita_real"] / pvm["volume_real"], np.nan
+        )
+        pvm["preco_orcado_unit"] = pvm["receita_orcada"] / pvm["volume_orcado"]
+        pvm["custo_real_unit"] = np.where(
+            pvm["volume_real"] > 0, pvm["custo_real"] / pvm["volume_real"], np.nan
+        )
+        pvm["custo_orcado_unit"] = pvm["custo_orcado"] / pvm["volume_orcado"]
+        pvm["lucro_orcado_unit"] = pvm["lucro_orcado"] / pvm["volume_orcado"]
+
+        total_q_real = pvm["volume_real"].sum()
+        total_q_budget = pvm["volume_orcado"].sum()
+        avg_budget_gp_unit = (
+            pvm["lucro_orcado"].sum() / total_q_budget if total_q_budget else 0
+        )
+        volume_effect_pvm = (total_q_real - total_q_budget) * avg_budget_gp_unit
+
+        pvm["mix_orcado"] = pvm["volume_orcado"] / total_q_budget if total_q_budget else 0
+        pvm["mix_real"] = pvm["volume_real"] / total_q_real if total_q_real else 0
+        pvm["mix_qty_variance"] = (
+            pvm["volume_real"] - total_q_real * pvm["mix_orcado"]
+        )
+        mix_effect_pvm = (
+            pvm["mix_qty_variance"] * pvm["lucro_orcado_unit"]
+        ).sum()
+
+        price_effect_pvm = (
+            (pvm["preco_real_unit"] - pvm["preco_orcado_unit"])
+            * pvm["volume_real"]
+        ).replace([np.inf, -np.inf], np.nan).sum(skipna=True)
+        cost_effect_pvm = -(
+            (pvm["custo_real_unit"] - pvm["custo_orcado_unit"])
+            * pvm["volume_real"]
+        ).replace([np.inf, -np.inf], np.nan).sum(skipna=True)
+        profit_gap_pvm = pvm["lucro_real"].sum() - pvm["lucro_orcado"].sum()
+        residual_pvm = (
+            profit_gap_pvm - price_effect_pvm - volume_effect_pvm
+            - mix_effect_pvm - cost_effect_pvm
+        )
+
+        pvm_bridge = pd.DataFrame({
+            "Componente": [
+                "Preço", "Volume total", "Mix de SKUs", "Custo unitário",
+                "Interações / residual", "Desvio total de lucro bruto",
+            ],
+            "Impacto (R$)": [
+                price_effect_pvm, volume_effect_pvm, mix_effect_pvm,
+                cost_effect_pvm, residual_pvm, profit_gap_pvm,
+            ],
+        })
+
+        fig_pvm = go.Figure(go.Waterfall(
+            orientation="v",
+            measure=["relative", "relative", "relative", "relative", "relative", "total"],
+            x=pvm_bridge["Componente"],
+            y=[price_effect_pvm, volume_effect_pvm, mix_effect_pvm,
+               cost_effect_pvm, residual_pvm, 0],
+            connector={"line": {"color": "#9AA8B8"}},
+            increasing={"marker": {"color": GREEN}},
+            decreasing={"marker": {"color": RED}},
+            totals={"marker": {"color": NAVY}},
+            text=[money(v) for v in pvm_bridge["Impacto (R$)"]],
+            textposition="outside",
+            hovertemplate="%{x}<br>Impacto: R$ %{y:,.2f}<extra></extra>",
+        ))
+        fig_pvm.update_layout(showlegend=False)
+        fig_pvm.update_yaxes(tickprefix="R$ ", tickformat=",.0f")
+        st.plotly_chart(style_plot(fig_pvm, height=440), width="stretch")
+        show_table(pvm_bridge, key="pvm_bridge_table")
+        download_csv(
+            pvm_bridge, "Baixar ponte Price-Volume-Mix em CSV",
+            "price_volume_mix.csv", "download_pvm_bridge",
+        )
+        st.caption(
+            "O efeito de mix mede a mudança na composição de volumes entre SKUs usando "
+            "o lucro bruto unitário orçado. O residual pode incluir interações, diferenças "
+            "de definição contábil e limitações da base. Não é evidência causal."
+        )
+
+    # ------------------------------------------------------
+    # DISPERSÃO TEMPORAL DE PREÇOS
+    # ------------------------------------------------------
+    with tab_disp:
+        st.subheader("Evolução e dispersão temporal do preço líquido")
+        st.caption(
+            "A base disponível permite avaliar variação temporal por SKU, mas não comparar "
+            "preços entre clientes ou vendedores se esses identificadores não existirem."
+        )
+        selected_disp_sku = st.selectbox(
+            "SKU para análise temporal",
+            sorted(filtered["sku_id"].astype(str).unique().tolist()),
+            key="pricing_dispersion_sku",
+        )
+        disp_data = filtered[
+            filtered["sku_id"].astype(str) == selected_disp_sku
+        ].copy()
+        disp_monthly = disp_data.groupby("mes", as_index=False).agg(
+            receita=("receita_liquida_real", "sum"),
+            volume=("quantidade_real", "sum"),
+            preco_orcado=("preco_liquido_orcado_unitario", "mean"),
+            desconto_medio=("desconto_pct", "mean"),
+        )
+        disp_monthly["preco_real"] = np.where(
+            disp_monthly["volume"] != 0,
+            disp_monthly["receita"] / disp_monthly["volume"],
+            np.nan,
+        )
+        price_points = disp_monthly["preco_real"].dropna()
+        if len(price_points):
+            avg_price = price_points.mean()
+            price_range_pct = (
+                (price_points.max() - price_points.min()) / avg_price * 100
+                if avg_price else np.nan
+            )
+            d1, d2, d3 = st.columns(3)
+            d1.metric("Preço médio realizado", money(avg_price))
+            d2.metric(
+                "Amplitude entre máximo e mínimo",
+                f"{price_range_pct:.1f}%" if pd.notna(price_range_pct) else "—",
+            )
+            d3.metric(
+                "Meses com preço observável",
+                number(len(price_points)),
+            )
+            price_chart_data = disp_monthly.melt(
+                id_vars="mes",
+                value_vars=["preco_real", "preco_orcado"],
+                var_name="Série",
+                value_name="Preço unitário (R$)",
+            )
+            fig_price = px.line(
+                price_chart_data,
+                x="mes", y="Preço unitário (R$)", color="Série",
+                markers=True,
+                title=f"Preço realizado x orçado — {selected_disp_sku}",
+            )
+            fig_price.update_yaxes(tickprefix="R$ ", tickformat=",.2f")
+            st.plotly_chart(style_plot(fig_price, height=360), width="stretch")
+            if disp_monthly["desconto_medio"].notna().any():
+                st.subheader("Evolução do desconto registrado")
+                discount_data = disp_monthly.dropna(subset=["desconto_medio"])
+                fig_discount = px.line(
+                    discount_data,
+                    x="mes", y="desconto_medio", markers=True,
+                    title="Desconto médio registrado por mês",
+                )
+                fig_discount.update_yaxes(ticksuffix="%")
+                st.plotly_chart(style_plot(fig_discount, height=300), width="stretch")
+            show_table(disp_monthly, key="pricing_temporal_dispersion")
+            download_csv(
+                disp_monthly, "Baixar série temporal de preços em CSV",
+                f"preco_temporal_{selected_disp_sku}.csv",
+                "download_price_temporal",
+            )
+        else:
+            st.info("Não há preços realizados válidos para este SKU no período filtrado.")
 
 
 # ==========================================================
