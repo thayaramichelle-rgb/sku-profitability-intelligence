@@ -1562,12 +1562,18 @@ elif page == "09 · Action Plan & Opportunities":
     recurring_skus = sku_summary[
         (sku_summary["desvio_lucro"] < 0) & (sku_summary["recorrencia_gap"] >= 0.5)
     ]
-    s1, s2, s3, s4 = st.columns(4)
+    price_gap = (
+        (filtered["preco_liquido_orcado_unitario"] - filtered["preco_liquido_unitario"]).clip(lower=0)
+        * filtered["quantidade_real"].clip(lower=0)
+    ).sum()
+    s1, s2, s3, s4, s5 = st.columns(5)
     s1.metric("Gap total de lucro bruto", money(total["desvio_lucro"]))
     s2.metric("Gap de margem bruta", percentage_points(total["desvio_margem_pp"]))
     s3.metric("SKUs com gap negativo", number(negative_skus["sku_id"].nunique()))
     s4.metric("SKUs com gap recorrente", number(recurring_skus["sku_id"].nunique()),
               help="SKUs com gap de lucro em pelo menos metade dos meses do recorte.")
+    s5.metric("Oportunidade indicativa de preço", money(price_gap),
+              help="Diferença positiva entre preço orçado e realizado multiplicada pelo volume realizado; não é recuperação garantida.")
 
     bridge_summary = pd.DataFrame({
         "Componente": ["Preço", "Volume", "Custo", "Interações / residual"],
