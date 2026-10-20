@@ -7,6 +7,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+from cenarios import aplicar_cenarios_controlados
+
 # ==========================================================
 # SKU PROFITABILITY INTELLIGENCE
 # ==========================================================
@@ -573,6 +575,7 @@ def load_data():
             data[col] = pd.to_numeric(data[col], errors="coerce")
 
     data = data.dropna(subset=["mes", "sku_id"]).copy()
+    data = aplicar_cenarios_controlados(data)
 
     data["desvio_receita"] = (
         data["receita_liquida_real"] - data["receita_liquida_orcada"]
@@ -1952,6 +1955,9 @@ elif page == "09 · Pricing Lab":
             preco_orcado=("preco_liquido_orcado_unitario", "mean"),
             desconto_medio=("desconto_pct", "mean"),
         )
+        # O desconto vem da base como proporção (0–1); o gráfico/tabela exibem 0–100%.
+        disp_monthly["desconto_medio"] = disp_monthly["desconto_medio"] * 100
+        disp_monthly = disp_monthly.rename(columns={"desconto_medio": "Desconto médio (%)"})
         disp_monthly["preco_real"] = np.where(
             disp_monthly["volume"] != 0,
             disp_monthly["receita"] / disp_monthly["volume"],
@@ -1988,12 +1994,12 @@ elif page == "09 · Pricing Lab":
             )
             fig_price.update_yaxes(tickprefix="R$ ", tickformat=",.2f")
             st.plotly_chart(style_plot(fig_price, height=360), width="stretch")
-            if disp_monthly["desconto_medio"].notna().any():
+            if disp_monthly["Desconto médio (%)"].notna().any():
                 st.subheader("Evolução do desconto registrado")
-                discount_data = disp_monthly.dropna(subset=["desconto_medio"])
+                discount_data = disp_monthly.dropna(subset=["Desconto médio (%)"])
                 fig_discount = px.line(
                     discount_data,
-                    x="mes", y="desconto_medio", markers=True,
+                    x="mes", y="Desconto médio (%)", markers=True,
                     title="Desconto médio registrado por mês",
                 )
                 fig_discount.update_yaxes(ticksuffix="%")
@@ -2023,26 +2029,46 @@ elif page == "10 · Rentabilidade & Descontos":
     )
 
     tab_portfolio, tab_discount, tab_simulation = st.tabs([
-        "Rentabilidade por família e segmento",
+        "Rentabilidade por segmento",
         "Oportunidade indicativa de preço",
         "Simulador de recuperação de margem",
     ])
 
     with tab_portfolio:
-        st.subheader("Onde a rentabilidade está pressionada?")
-        level = st.radio(
-            "Agrupar por",
-            ["Família", "Segmento"],
-            horizontal=True,
-            key="profitability_level",
-        )
-        group_col = "familia" if level == "Família" else "segmento"
+        st.subheader("Quais segmentos concentram pressão de margem e descontos?")
+        level = "Segmento"
+        group_col = "segmento"
         rent = summarize(filtered, [group_col])
-        discount_agg = filtered.groupby(group_col, dropna=False).agg(
-            desconto_medio=("desconto_pct", "mean"),
-            preco_real_medio=("preco_liquido_unitario", "mean"),
-            preco_orcado_medio=("preco_liquido_orcado_unitario", "mean"),
+
+        # Médias ponderadas por volume: evitam que meses/linhas de baixo volume
+        # tenham o mesmo peso que operações de maior escala.
+        rent_input = filtered.copy()
+        rent_input["_volume_preco"] = pd.to_numeric(
+            rent_input["quantidade_real"], errors="coerce"
+        ).fillna(0).clip(lower=0)
+        rent_input["_desconto_x_volume"] = (
+            pd.to_numeric(rent_input["desconto_pct"], errors="coerce").fillna(0)
+            * rent_input["_volume_preco"]
+        )
+        rent_input["_preco_real_x_volume"] = (
+            rent_input["preco_liquido_unitario"] * rent_input["_volume_preco"]
+        )
+        rent_input["_preco_orcado_x_volume"] = (
+            rent_input["preco_liquido_orcado_unitario"] * rent_input["_volume_preco"]
+        )
+        discount_agg = rent_input.groupby(group_col, dropna=False).agg(
+            volume_preco=("_volume_preco", "sum"),
+            desconto_x_volume=("_desconto_x_volume", "sum"),
+            preco_real_x_volume=("_preco_real_x_volume", "sum"),
+            preco_orcado_x_volume=("_preco_orcado_x_volume", "sum"),
         ).reset_index()
+        volume_weight = discount_agg["volume_preco"].replace(0, np.nan)
+        discount_agg["desconto_medio"] = discount_agg["desconto_x_volume"] / volume_weight
+        discount_agg["preco_real_medio"] = discount_agg["preco_real_x_volume"] / volume_weight
+        discount_agg["preco_orcado_medio"] = discount_agg["preco_orcado_x_volume"] / volume_weight
+        discount_agg = discount_agg[[
+            group_col, "desconto_medio", "preco_real_medio", "preco_orcado_medio"
+        ]]
         rent = rent.merge(discount_agg, on=group_col, how="left")
         rent["oportunidade_preco_indicativa"] = (
             (filtered["preco_liquido_orcado_unitario"] - filtered["preco_liquido_unitario"])
@@ -2129,16 +2155,25 @@ elif page == "10 · Rentabilidade & Descontos":
             price_op["preco_liquido_orcado_unitario"]
             * price_op["quantidade_real"].clip(lower=0)
         )
+        price_op["_volume_peso"] = price_op["quantidade_real"].clip(lower=0)
+        price_op["_preco_real_x_volume"] = price_op["preco_liquido_unitario"] * price_op["_volume_peso"]
+        price_op["_preco_orcado_x_volume"] = price_op["preco_liquido_orcado_unitario"] * price_op["_volume_peso"]
+        price_op["_desconto_x_volume"] = price_op["desconto_pct"].fillna(0) * price_op["_volume_peso"]
         opp = price_op.groupby(["sku_id", "familia", "segmento"], dropna=False).agg(
             receita_real=("receita_liquida_real", "sum"),
-            volume_real=("quantidade_real", "sum"),
-            preco_real_medio=("preco_liquido_unitario", "mean"),
-            preco_orcado_medio=("preco_liquido_orcado_unitario", "mean"),
-            desconto_medio=("desconto_pct", "mean"),
+            volume_real=("_volume_peso", "sum"),
+            preco_real_x_volume=("_preco_real_x_volume", "sum"),
+            preco_orcado_x_volume=("_preco_orcado_x_volume", "sum"),
+            desconto_x_volume=("_desconto_x_volume", "sum"),
             desvio_lucro=("desvio_lucro", "sum"),
             oportunidade_preco_indicativa=("oportunidade_preco_indicativa", "sum"),
             receita_preco_orcado_volume_real=("receita_preco_orcado_volume_real", "sum"),
         ).reset_index()
+        volume_peso = opp["volume_real"].replace(0, np.nan)
+        opp["preco_real_medio"] = opp["preco_real_x_volume"] / volume_peso
+        opp["preco_orcado_medio"] = opp["preco_orcado_x_volume"] / volume_peso
+        opp["desconto_medio"] = opp["desconto_x_volume"] / volume_peso * 100
+        opp = opp.drop(columns=["preco_real_x_volume", "preco_orcado_x_volume", "desconto_x_volume"])
         opp["gap_preco_pct"] = np.where(
             opp["preco_orcado_medio"] != 0,
             (opp["preco_real_medio"] / opp["preco_orcado_medio"] - 1) * 100,
@@ -2228,8 +2263,10 @@ elif page == "10 · Rentabilidade & Descontos":
         sim["gap_positivo_sim"] = (sim["preco_orcado_sim"] - sim["preco_base_sim"]).clip(lower=0)
         sim["sku_reajustado_sim"] = sim["gap_positivo_sim"] > 0
         sim["ajuste_unitario_sim"] = sim["gap_positivo_sim"] * (gap_capture_pct / 100)
+        sim["gap_x_volume_sim"] = sim["gap_positivo_sim"] * sim["volume_base_sim"]
+        # Sem reajuste de preço, não deve haver perda de volume simulada.
         sim["volume_cenario_sim"] = np.where(
-            sim["sku_reajustado_sim"],
+            sim["sku_reajustado_sim"] & (gap_capture_pct > 0),
             sim["volume_base_sim"] * (volume_retention_pct / 100),
             sim["volume_base_sim"],
         )
@@ -2255,9 +2292,14 @@ elif page == "10 · Rentabilidade & Descontos":
             variacao_lucro_bruto=("variacao_lucro_sim", "sum"),
             volume_base=("volume_base_sim", "sum"),
             volume_cenario=("volume_cenario_sim", "sum"),
-            gap_preco_medio=("gap_positivo_sim", "mean"),
+            gap_x_volume=("gap_x_volume_sim", "sum"),
             linhas_com_gap=("sku_reajustado_sim", "sum"),
         ).reset_index()
+        sku_sim["gap_preco_medio"] = np.where(
+            sku_sim["volume_base"] > 0,
+            sku_sim["gap_x_volume"] / sku_sim["volume_base"],
+            np.nan,
+        )
         sku_sim["margem_base_pct"] = np.where(
             sku_sim["receita_base"] != 0,
             sku_sim["lucro_base"] / sku_sim["receita_base"] * 100,
