@@ -97,9 +97,9 @@ class ControlledScenarioTests(unittest.TestCase):
         self.assertTrue(((by_stratum["affected"] - by_stratum["total"] * 0.25).abs() <= 1).all())
 
     def test_only_problem_skus_have_negative_gross_profit_gap(self):
-        gap = self.history.groupby("sku_id").apply(
-            lambda group: group["lucro_bruto_real"].sum() - group["lucro_bruto_orcado"].sum(),
-            include_groups=False,
+        gap = (
+            self.history.groupby("sku_id")["lucro_bruto_real"].sum()
+            - self.history.groupby("sku_id")["lucro_bruto_orcado"].sum()
         )
         self.assertEqual(int((gap < -0.01).sum()), 2_000)
         clean = self.history[self.history["cenario_simulado"] == "Sem desvio induzido"]
